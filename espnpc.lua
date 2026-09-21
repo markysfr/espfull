@@ -1,5 +1,5 @@
 -- ============================================
--- ESP JUGADORES + MOBS/NPCs (Bots) 2025
+-- ESP JUGADORES + MOBS/NPCs v4.0 (2025)
 -- ============================================
 
 -- === CONFIGURACIÓN ===
@@ -7,18 +7,19 @@ local defaultHighlightColor = Color3.fromRGB(255, 255, 255) -- blanco para jugad
 local outlineColor          = Color3.fromRGB(0, 0, 0)
 local fillTransparency      = 0.5
 local outlineTransparency   = 0
-local maxDistance           = 500
+local maxDistance           = 2000   -- 🔥 ANTES 500 → ahora 2000
+local updateSpeed           = 0.25   -- 🔥 ANTES 0.5 → ahora 0.25
 
--- 🎨 Colores para mobs/NPCs (puedes cambiarlos)
+-- 🎨 Colores para mobs/NPCs
 local NPC_COLOR        = Color3.fromRGB(255, 80, 80)   -- rojo (enemigos)
 local NPC_OUTLINE      = Color3.fromRGB(255, 0, 0)
 local BOSS_COLOR       = Color3.fromRGB(180, 0, 255)   -- morado (jefes)
 local BOSS_OUTLINE     = Color3.fromRGB(120, 0, 200)
 
--- 📏 Tamaño mínimo para considerar algo como "mob" (evita basura)
+-- 📏 Tamaño mínimo para considerar algo como "mob"
 local MIN_MOB_SIZE = 2
 
--- Tabla para guardar distancias (optimización)
+-- Tablas para guardar distancias (optimización)
 local playerDistances = {}
 local npcDistances = {}
 
@@ -47,6 +48,7 @@ local function createHighlight(player)
         highlight.OutlineColor = outlineColor
         highlight.FillTransparency = fillTransparency
         highlight.OutlineTransparency = outlineTransparency
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop  -- 🔥 se ve a través de paredes
         highlight.Parent = character
     end
 end
@@ -62,42 +64,59 @@ local function removeHighlight(player)
 end
 
 -- ============================================
--- 👹 DETECCIÓN DE MOBS / NPCs
+-- 👹 DETECCIÓN DE MOBS / NPCs (MEJORADA)
 -- ============================================
--- Función que decide si un objeto es un "mob" válido
 local function esMob(obj)
     -- Tiene que ser Model o Folder
     if not (obj:IsA("Model") or obj:IsA("Folder")) then return false end
 
-    -- No debe ser un jugador (ya los manejamos aparte)
+    -- No debe ser un jugador
     if game.Players:GetPlayerFromCharacter(obj) then return false end
 
-    -- Debe tener un Humanoid (esto filtra armas, partes, decoraciones)
+    -- 🔥 AHORA: Humanoid OPCIONAL
     local humanoid = obj:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return false end
+    if humanoid then
+        -- Si tiene Humanoid y está muerto, ignorar
+        if humanoid.Health <= 0 then return false end
+    end
 
-    -- Debe tener vida (algunos Humanoid están muertos)
-    if humanoid.Health <= 0 then return false end
-
-    -- Debe tener una parte principal para calcular distancia
+    -- 🔥 Buscar raíz de forma más flexible
     local root = obj:FindFirstChild("HumanoidRootPart")
         or obj.PrimaryPart
         or obj:FindFirstChildOfClass("Part")
+        or obj:FindFirstChildOfClass("BasePart")
+
+    -- 🔥 Si no hay raíz directa, buscar cualquier BasePart dentro
+    if not root then
+        for _, v in ipairs(obj:GetChildren()) do
+            if v:IsA("BasePart") then
+                root = v
+                break
+            end
+        end
+    end
+
     if not root then return false end
 
-    return true
+    -- 🔥 Filtro de tamaño (evita basura pero no mobs pequeños)
+    if root:IsA("BasePart") and root.Size.Magnitude < MIN_MOB_SIZE then
+        return false
+    end
+
+    return true, root
 end
 
 -- Detecta si un mob es "jefe" (por nombre o tamaño)
 local function esJefe(obj)
-    -- Por nombre
     local nombre = string.lower(obj.Name)
-    if string.find(nombre, "boss") or string.find(nombre, "jefe") 
+    if string.find(nombre, "boss") or string.find(nombre, "jefe")
        or string.find(nombre, "king") or string.find(nombre, "lord")
-       or string.find(nombre, "elite") or string.find(nombre, "champion") then
+       or string.find(nombre, "elite") or string.find(nombre, "champion")
+       or string.find(nombre, "titan") or string.find(nombre, "giant")
+       or string.find(nombre, "demon") or string.find(nombre, "dragon") then
         return true
     end
-    -- Por tamaño (si su PrimaryPart es enorme)
+
     local root = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
     if root and root.Size.Magnitude > 15 then
         return true
@@ -112,7 +131,7 @@ local function createNpcHighlight(obj)
     local highlight = Instance.new("Highlight")
     highlight.Name = "NpcHighlight"
     highlight.Adornee = obj
-    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop  -- 🔥 se ve a través de paredes
 
     if esJefe(obj) then
         highlight.FillColor = BOSS_COLOR
@@ -129,7 +148,6 @@ local function createNpcHighlight(obj)
     highlight.Parent = obj
 end
 
--- Quita highlight de un mob
 local function removeNpcHighlight(obj)
     local h = obj:FindFirstChild("NpcHighlight")
     if h then h:Destroy() end
@@ -173,13 +191,10 @@ local function updateNpcHighlights()
     local localPosition = localCharacter.PrimaryPart.Position
     local actuales = {}
 
-    -- Recorremos TODO el Workspace buscando mobs
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if esMob(obj) then
-            local root = obj:FindFirstChild("HumanoidRootPart") 
-                      or obj.PrimaryPart 
-                      or obj:FindFirstChildOfClass("Part")
-            if root then
+        if obj:IsA("Model") or obj:IsA("Folder") then
+            local valido, root = esMob(obj)
+            if valido and root then
                 local distance = (localPosition - root.Position).Magnitude
                 npcDistances[obj] = distance
 
@@ -191,7 +206,6 @@ local function updateNpcHighlights()
         end
     end
 
-    -- Limpiamos highlights de mobs que ya no están o están lejos
     for obj, _ in pairs(npcDistances) do
         if not actuales[obj] or not obj.Parent then
             if obj and obj.Parent then
@@ -223,9 +237,11 @@ end)
 -- ============================================
 -- 🔁 BUCLE PRINCIPAL
 -- ============================================
-spawn(function()
-    while task.wait(0.5) do
-        updatePlayerHighlights()
-        updateNpcHighlights()
+task.spawn(function()
+    while task.wait(updateSpeed) do
+        pcall(updatePlayerHighlights)
+        pcall(updateNpcHighlights)
     end
 end)
+
+print("[m6c ESP v4.0] Cargado ✅ | Distancia: " .. maxDistance .. " | Update: " .. updateSpeed .. "s")
