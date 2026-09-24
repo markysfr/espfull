@@ -1,30 +1,35 @@
 -- ============================================
--- ESP JUGADORES + MOBS/NPCs v4.0 (2025)
+-- ESP JUGADORES + MOBS/NPCs v5.0 ULTRA DIOS PRO MAX (2025)
 -- ============================================
 
 -- === CONFIGURACIÓN ===
-local defaultHighlightColor = Color3.fromRGB(255, 255, 255) -- blanco para jugadores sin team
+local defaultHighlightColor = Color3.fromRGB(255, 255, 255)
 local outlineColor          = Color3.fromRGB(0, 0, 0)
 local fillTransparency      = 0.5
 local outlineTransparency   = 0
-local maxDistance           = 2000   -- 🔥 ANTES 500 → ahora 2000
-local updateSpeed           = 0.25   -- 🔥 ANTES 0.5 → ahora 0.25
+local maxDistance           = 3000   -- 🔥 Más distancia
+local updateSpeed           = 0.3    -- 🔥 Balance entre fluidez y rendimiento
 
--- 🎨 Colores para mobs/NPCs
-local NPC_COLOR        = Color3.fromRGB(255, 80, 80)   -- rojo (enemigos)
+-- 🎨 Colores
+local NPC_COLOR        = Color3.fromRGB(255, 80, 80)
 local NPC_OUTLINE      = Color3.fromRGB(255, 0, 0)
-local BOSS_COLOR       = Color3.fromRGB(180, 0, 255)   -- morado (jefes)
+local BOSS_COLOR       = Color3.fromRGB(180, 0, 255)
 local BOSS_OUTLINE     = Color3.fromRGB(120, 0, 200)
 
--- 📏 Tamaño mínimo para considerar algo como "mob"
-local MIN_MOB_SIZE = 2
+-- 📏 Tamaño mínimo
+local MIN_MOB_SIZE = 1.5
 
--- Tablas para guardar distancias (optimización)
+-- 🔥 Límite de Highlights (Roblox solo renderiza 31)
+local MAX_HIGHLIGHTS = 30
+local highlightCount = 0
+
+-- Tablas
 local playerDistances = {}
 local npcDistances = {}
+local activeHighlights = {}  -- 🔥 Para controlar el límite
 
 -- ============================================
--- 🎨 COLORES POR EQUIPO (JUGADORES)
+-- 🎨 COLORES POR EQUIPO
 -- ============================================
 local function getHighlightColor(player)
     local team = player.Team
@@ -36,21 +41,46 @@ local function getHighlightColor(player)
 end
 
 -- ============================================
+-- 🔥 SISTEMA DE PRIORIDAD DE HIGHLIGHTS
+-- ============================================
+local function canAddHighlight()
+    return highlightCount < MAX_HIGHLIGHTS
+end
+
+local function registerHighlight(obj)
+    if activeHighlights[obj] then return true end
+    if not canAddHighlight() then return false end
+    activeHighlights[obj] = true
+    highlightCount = highlightCount + 1
+    return true
+end
+
+local function unregisterHighlight(obj)
+    if activeHighlights[obj] then
+        activeHighlights[obj] = nil
+        highlightCount = math.max(0, highlightCount - 1)
+    end
+end
+
+-- ============================================
 -- 👤 HIGHLIGHT DE JUGADORES
 -- ============================================
 local function createHighlight(player)
-    local character = player.Character or player.CharacterAdded:Wait()
-    if character and not character:FindFirstChild("PlayerHighlight") then
-        local highlight = Instance.new("Highlight")
-        highlight.Name = "PlayerHighlight"
-        highlight.Adornee = character
-        highlight.FillColor = getHighlightColor(player)
-        highlight.OutlineColor = outlineColor
-        highlight.FillTransparency = fillTransparency
-        highlight.OutlineTransparency = outlineTransparency
-        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop  -- 🔥 se ve a través de paredes
-        highlight.Parent = character
-    end
+    local character = player.Character
+    if not character then return end
+    if character:FindFirstChild("PlayerHighlight") then return end
+
+    if not registerHighlight(character) then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "PlayerHighlight"
+    highlight.Adornee = character
+    highlight.FillColor = getHighlightColor(player)
+    highlight.OutlineColor = outlineColor
+    highlight.FillTransparency = fillTransparency
+    highlight.OutlineTransparency = outlineTransparency
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = character
 end
 
 local function removeHighlight(player)
@@ -59,34 +89,36 @@ local function removeHighlight(player)
         local highlight = character:FindFirstChild("PlayerHighlight")
         if highlight then
             highlight:Destroy()
+            unregisterHighlight(character)
         end
     end
 end
 
 -- ============================================
--- 👹 DETECCIÓN DE MOBS / NPCs (MEJORADA)
+-- 👹 DETECCIÓN DE MOBS (MEJORADA Y FLEXIBLE)
 -- ============================================
 local function esMob(obj)
-    -- Tiene que ser Model o Folder
     if not (obj:IsA("Model") or obj:IsA("Folder")) then return false end
-
-    -- No debe ser un jugador
     if game.Players:GetPlayerFromCharacter(obj) then return false end
 
-    -- 🔥 AHORA: Humanoid OPCIONAL
-    local humanoid = obj:FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        -- Si tiene Humanoid y está muerto, ignorar
-        if humanoid.Health <= 0 then return false end
+    -- 🔥 Filtro de blacklist básico
+    local nombre = string.lower(obj.Name)
+    if string.find(nombre, "tool") or string.find(nombre, "handle")
+       or string.find(nombre, "bullet") or string.find(nombre, "projectile")
+       or string.find(nombre, "effect") or string.find(nombre, "particle") then
+        return false
     end
 
-    -- 🔥 Buscar raíz de forma más flexible
+    -- 🔥 Humanoid opcional
+    local humanoid = obj:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.Health <= 0 then return false end
+
+    -- 🔥 Buscar raíz flexible
     local root = obj:FindFirstChild("HumanoidRootPart")
         or obj.PrimaryPart
         or obj:FindFirstChildOfClass("Part")
         or obj:FindFirstChildOfClass("BasePart")
 
-    -- 🔥 Si no hay raíz directa, buscar cualquier BasePart dentro
     if not root then
         for _, v in ipairs(obj:GetChildren()) do
             if v:IsA("BasePart") then
@@ -97,8 +129,6 @@ local function esMob(obj)
     end
 
     if not root then return false end
-
-    -- 🔥 Filtro de tamaño (evita basura pero no mobs pequeños)
     if root:IsA("BasePart") and root.Size.Magnitude < MIN_MOB_SIZE then
         return false
     end
@@ -106,15 +136,18 @@ local function esMob(obj)
     return true, root
 end
 
--- Detecta si un mob es "jefe" (por nombre o tamaño)
+-- Detectar jefe
 local function esJefe(obj)
     local nombre = string.lower(obj.Name)
-    if string.find(nombre, "boss") or string.find(nombre, "jefe")
-       or string.find(nombre, "king") or string.find(nombre, "lord")
-       or string.find(nombre, "elite") or string.find(nombre, "champion")
-       or string.find(nombre, "titan") or string.find(nombre, "giant")
-       or string.find(nombre, "demon") or string.find(nombre, "dragon") then
-        return true
+    local palabras = {
+        "boss", "jefe", "king", "lord", "elite", "champion",
+        "titan", "giant", "demon", "dragon", "god", "legend",
+        "mythic", "epic", "ancient", "elder", "guardian"
+    }
+    for _, palabra in ipairs(palabras) do
+        if string.find(nombre, palabra) then
+            return true
+        end
     end
 
     local root = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
@@ -124,14 +157,17 @@ local function esJefe(obj)
     return false
 end
 
--- Crea highlight en un mob
+-- ============================================
+-- 🎯 CREAR HIGHLIGHT DE NPC
+-- ============================================
 local function createNpcHighlight(obj)
     if obj:FindFirstChild("NpcHighlight") then return end
+    if not registerHighlight(obj) then return end
 
     local highlight = Instance.new("Highlight")
     highlight.Name = "NpcHighlight"
     highlight.Adornee = obj
-    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop  -- 🔥 se ve a través de paredes
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 
     if esJefe(obj) then
         highlight.FillColor = BOSS_COLOR
@@ -150,7 +186,10 @@ end
 
 local function removeNpcHighlight(obj)
     local h = obj:FindFirstChild("NpcHighlight")
-    if h then h:Destroy() end
+    if h then
+        h:Destroy()
+        unregisterHighlight(obj)
+    end
 end
 
 -- ============================================
@@ -190,22 +229,40 @@ local function updateNpcHighlights()
 
     local localPosition = localCharacter.PrimaryPart.Position
     local actuales = {}
+    local candidatos = {}
 
+    -- 🔥 FASE 1: Recoger todos los mobs candidatos con su distancia
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("Model") or obj:IsA("Folder") then
             local valido, root = esMob(obj)
             if valido and root then
                 local distance = (localPosition - root.Position).Magnitude
-                npcDistances[obj] = distance
-
                 if distance <= maxDistance then
-                    createNpcHighlight(obj)
-                    actuales[obj] = true
+                    table.insert(candidatos, {obj = obj, dist = distance, root = root})
                 end
             end
         end
     end
 
+    -- 🔥 FASE 2: Ordenar por distancia (más cercanos primero)
+    table.sort(candidatos, function(a, b) return a.dist < b.dist end)
+
+    -- 🔥 FASE 3: Aplicar highlight a los más cercanos
+    for _, data in ipairs(candidatos) do
+        local obj = data.obj
+        if not obj:FindFirstChild("NpcHighlight") then
+            if canAddHighlight() then
+                createNpcHighlight(obj)
+            else
+                -- 🔥 Si no hay espacio, al menos no crashea
+                break
+            end
+        end
+        actuales[obj] = true
+        npcDistances[obj] = data.dist
+    end
+
+    -- 🔥 FASE 4: Limpiar los que ya no están
     for obj, _ in pairs(npcDistances) do
         if not actuales[obj] or not obj.Parent then
             if obj and obj.Parent then
@@ -221,7 +278,7 @@ end
 -- ============================================
 game.Players.PlayerAdded:Connect(function(player)
     player.CharacterAdded:Connect(function()
-        task.wait()
+        task.wait(0.5)
         createHighlight(player)
     end)
     player.CharacterRemoving:Connect(function()
@@ -244,4 +301,4 @@ task.spawn(function()
     end
 end)
 
-print("[m6c ESP v4.0] Cargado ✅ | Distancia: " .. maxDistance .. " | Update: " .. updateSpeed .. "s")
+print("[m6c ESP v5.0 ULTRA DIOS PRO MAX] Cargado ✅ | Distancia: " .. maxDistance .. " | Update: " .. updateSpeed .. "s")
